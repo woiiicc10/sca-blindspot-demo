@@ -1,0 +1,33 @@
+{
+  "name": "sca-blindspot-demo",
+  "version": "1.0.0",
+  "description": "Demonstrates that npm audit matches CVEs by package name+version only, not by actual code integrity",
+  "private": true,
+  "scripts": {
+    "setup": "npm install",
+    "experiment": "node scripts/benchmark.js --quick",
+    "audit:before": "node scripts/audit.js before",
+    "audit:after": "node scripts/audit.js after",
+    "tamper": "node scripts/tamper.js inject",
+    "restore": "node scripts/tamper.js restore",
+    "compare": "node scripts/compare-audit.js",
+    "verify:backdoor": "node scripts/verify-backdoor.js",
+    "verify:integrity": "node scripts/verify-integrity.js",
+    "demo": "node demo/app.js",
+    "benchmark": "node scripts/benchmark.js"
+  },
+  "dependencies": {
+    "lodash": "4.17.15"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "sca",
+    "npm-audit",
+    "supply-chain",
+    "security",
+    "demo"
+  ],
+  "license": "MIT"
+}
