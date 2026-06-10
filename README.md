@@ -1,219 +1,197 @@
 # SCA Blindspot Demo
 
-**证明：主流 SCA 工具（以 `npm audit` 为例）仅根据「包名 + 版本号」匹配已知漏洞，不检查本地 `node_modules` 中的代码是否被篡改。**
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green.svg)](package.json)
 
-即使手动在第三方库源码中植入后门，`npm audit` 的扫描结果依然不变。
+**A reproducible lab showing that common SCA tools match CVEs by package name + version — not by actual code in `node_modules`.**
+
+[中文说明](#中文说明) · [Full report (中文)](实验报告.md)
 
 ---
 
-## 实验假设
+## Overview
 
-| 维度 | 内容 |
-|------|------|
-| **H0（零假设）** | SCA 会检测本地源码篡改，篡改后扫描结果会变化 |
-| **H1（备择假设）** | SCA 只做 advisory 匹配（包名+版本），篡改后结果不变 |
-| **预期结论** | 支持 H1 — `npm audit` 输出 before/after 完全一致 |
+Software Composition Analysis (SCA) tools such as `npm audit` are widely used in CI/CD pipelines. They answer:
 
-## 快速开始
+> *Does this project depend on packages with **known** vulnerabilities?*
+
+They do **not** answer:
+
+> *Has the installed code in `node_modules` been tampered with?*
+
+This repository demonstrates that gap with a controlled experiment:
+
+1. Pin a vulnerable dependency (`lodash@4.17.15`)
+2. Run multiple scanners **before** tampering
+3. Inject a demo backdoor into `node_modules/lodash/lodash.js`
+4. Run the same scanners **after** tampering
+5. Compare results — SCA output stays the same; the backdoor still runs
+
+**Takeaway:** passing `npm audit` does not mean your dependencies are trustworthy.
+
+## Key findings
+
+| Tool | Detects tampering? | Notes |
+|------|:------------------:|-------|
+| npm audit | No | Advisory lookup by package + version |
+| OSV-Scanner (OSV API) | No | Same class as npm audit |
+| Retire.js | No | Scans file content, but only for **known CVE version ranges** |
+| better-npm-audit | No | Wrapper around npm audit |
+| File hash check (control) | **Yes** | Integrity layer, not SCA |
+
+## Requirements
+
+- Node.js **≥ 18**
+- npm
+- Network access (for `npm install`, OSV API, and `npx retire`)
+
+## Quick start
 
 ```bash
-# 1. 安装依赖
+git clone https://github.com/woiiicc10/sca-blindspot-demo.git
+cd sca-blindspot-demo
 npm install
-
-# 2. 一键运行（二选一）
-npm run experiment   # 快速：仅 npm audit 对比
-npm run benchmark    # 完整：多工具对比 + 生成 REPORT.md
 ```
 
-实验会自动：
-
-1. 安装 `lodash@4.17.15`（含已知 CVE 的旧版本）
-2. 运行 `npm audit`，保存 `results/audit-before.json`
-3. 在 `node_modules/lodash/lodash.js` 末尾注入演示用后门
-4. 再次运行 `npm audit`，保存 `results/audit-after.json`
-5. 对比两份报告（应完全相同）
-6. 验证后门确实能执行（证明威胁真实存在）
-
-## 分步命令
+**Option A — full multi-tool benchmark (recommended):**
 
 ```bash
-npm run setup              # npm install
-npm run audit:before       # 篡改前 audit
-npm run tamper             # 注入后门
-npm run audit:after        # 篡改后 audit
-npm run compare            # 对比 JSON 报告
-npm run verify:backdoor    # 证明后门可触发（静默模式，写 marker 文件）
-npm run verify:integrity   # 对照：npm ci 能发现篡改（可选）
-npm run demo               # 模拟正常应用加载 lodash → 弹出警告窗
-npm run restore            # 从备份恢复 lodash.js
-npm run benchmark          # 多工具对比扫描 + 自动生成 REPORT.md
+npm run benchmark
 ```
 
-## 多工具对比报告
-
-运行 `npm run benchmark` 会对比以下工具在篡改前后的扫描结果，并生成 **[REPORT.md](REPORT.md)**：
-
-| 工具 | 类型 |
-|------|------|
-| npm audit | 依赖型 SCA（npm Advisory DB） |
-| OSV-Scanner（OSV API） | 依赖型 SCA（OSV 数据库） |
-| Retire.js | 文件内容 SCA（扫描 node_modules 源码） |
-| better-npm-audit | npm audit CLI 封装 |
-| Lockfile Integrity | 完整性对照组（SHA-256） |
-
-原始数据：`results/benchmark/before/summary.json` 与 `results/benchmark/after/summary.json`（运行 `npm run benchmark` 后本地生成）
-
-完整实验报告见 **[实验报告.md](实验报告.md)**；`REPORT.md` 为 benchmark 自动生成的摘要（不纳入版本库）。
-
-
-## 实验设计
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  package.json          lodash@4.17.15  (固定版本)            │
-│  package-lock.json     integrity hash (安装时校验)           │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  npm audit                                                   │
-│  ┌──────────────┐    advisory DB     ┌──────────────────┐   │
-│  │ 包名+版本号   │ ───────────────►  │ 已知 CVE/GHSA    │   │
-│  └──────────────┘                    └──────────────────┘   │
-│         ✗ 不读取 node_modules 源码内容                       │
-└─────────────────────────────────────────────────────────────┘
-                              │
-         手动篡改 node_modules/lodash/lodash.js
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  npm audit 结果 → 不变（本 demo 的核心结论）                  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 为什么选 lodash@4.17.15？
-
-- 广泛使用，认知度高
-- 该版本在 advisory 数据库中有已知漏洞（Prototype Pollution 等）
-- 篡改前后都有非零漏洞报告，对比更直观
-
-### 注入的后门是什么？
-
-在 `lodash.js` 末尾追加一段**仅用于演示**的代码。当任何程序 `require('lodash')` 时：
-
-- **Windows / macOS**：弹出系统警告对话框
-- **Linux**：在 stderr 输出提示（无 GUI）
-
-弹窗内容示例：
-
-> lodash 已被篡改植入后门！  
-> npm audit 仅匹配「包名 + 版本号」，无法检测 node_modules 中的源码篡改。
-
-**不修改** `package.json` 版本号，**不修改** `package-lock.json`，因此 `npm audit` 结果不变。
-
-#### 演示弹窗（推荐用于答辩/展示）
+**Option B — quick npm audit only:**
 
 ```bash
-npm run tamper    # 注入后门（若尚未注入）
-npm run demo      # 模拟正常业务代码 require('lodash') → 弹窗出现
+npm run experiment
 ```
 
-自动化实验使用 `SCA_DEMO_SILENT=1` 跳过弹窗，避免阻塞流水线。
-
-## 预期输出示例
-
-```
-=== npm audit comparison (before vs after tampering) ===
-
-Summary (metadata.vulnerabilities):
-  before: { info: 0, low: 0, moderate: 1, high: 1, critical: 0, total: 2 }
-  after : { info: 0, low: 0, moderate: 1, high: 1, critical: 0, total: 2 }
-  match : YES
-
-Advisory entries:
-  before count: 1
-  after count : 1
-  match       : YES
-
-CONCLUSION: npm audit output is IDENTICAL after local source tampering.
-SCA matched package name + version only — it did not inspect modified code.
-```
-
-## 对照实验：什么能发现篡改？
-
-| 机制 | 能否发现本地篡改 | 说明 |
-|------|------------------|------|
-| `npm audit` | ❌ 不能 | 仅查 advisory 数据库 |
-| `npm ci` + lockfile integrity | ✅ 能（重装时） | 删除并重装 `node_modules`，用 tarball 哈希校验；不会报警，而是静默覆盖篡改 |
-| Socket.dev / Phylum 等 | ⚠️ 部分能 | 行为/内容分析，非传统 SCA |
-| 文件完整性监控 | ✅ 能 | 独立安全层 |
-
-运行对照实验：
+**Option C — visual demo (popup on Windows/macOS):**
 
 ```bash
-npm run tamper
-npm run verify:integrity
+npm run tamper    # inject demo backdoor if not already present
+npm run demo      # require('lodash') → system warning dialog
 ```
 
-## 结论与启示
+## Expected output
 
-1. **SCA ≠ 代码完整性校验** — SCA 解决的是「是否使用了有已知漏洞的版本」，不是「代码是否可信」。
-2. **供应链攻击有两个盲区**：
-   - 同版本本地篡改（本实验）
-   - 恶意包尚未进入 advisory 数据库（Typosquatting、账号劫持）
-3. **缓解需分层**：lockfile + `npm ci`、provenance/sigstore、行为分析工具、最小权限、代码审查。
+After `npm run benchmark`, you should see:
 
-## 扩展实验（加分项）
-
-同一项目可对比其他工具，预期结果类似：
-
-```bash
-npx snyk test                    # Snyk CLI
-# OWASP Dependency-Check 扫描 package-lock.json
-# GitHub Dependabot — push 后观察 PR
+```
+  npm audit: 1 -> 1  identical=true  tampering=否
+  OSV-Scanner（OSV API）: 6 -> 6  identical=true  tampering=否
+  Retire.js: 6 -> 6  identical=true  tampering=否
+  better-npm-audit: 1 -> 1  identical=true  tampering=否
+  Lockfile Integrity（对照组）: 0 -> 1  identical=false  tampering=是（文件哈希变化）
 ```
 
-## 开源贡献说明
+- SCA tools report the **same** vulnerability counts before and after tampering
+- The integrity control detects that `lodash.js` was modified
+- A summary is written to `REPORT.md` (local, gitignored)
+- Raw JSON: `results/benchmark/before/summary.json` and `results/benchmark/after/summary.json`
 
-本仓库可作为：
+## How it works
 
-- 可复现的安全教育 demo
-- 向社区文档补充「SCA 能力边界」的 PR 素材（npm docs、OWASP wiki 等）
-- 课程/作业实验报告的可验证附件
+```
+ package.json / package-lock.json
+         │
+         ▼
+   SCA tools ──► advisory DB ──► known CVEs for lodash@4.17.15
+         │
+         ✗ does not inspect node_modules file contents for backdoors
+         │
+  manual tamper of node_modules/lodash/lodash.js
+         │
+         ▼
+   SCA results unchanged  ·  backdoor still executes on require()
+```
 
-## 安全声明
+The demo backdoor is appended to `lodash.js`. It:
 
-- 后门代码**仅供本地实验**，请勿发布到 npm 或任何公共仓库的 `node_modules`
-- 实验结束后运行 `npm run restore` 或 `rm -rf node_modules && npm ci` 恢复
+- Does **not** change `package.json` or `package-lock.json`
+- Shows a system dialog on Windows/macOS when lodash is loaded (`npm run demo`)
+- Uses `SCA_DEMO_SILENT=1` during automated runs to skip the GUI
 
-## 目录结构
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run setup` | Install dependencies |
+| `npm run benchmark` | Multi-tool scan before/after tampering + generate `REPORT.md` |
+| `npm run experiment` | Quick npm audit-only flow |
+| `npm run tamper` | Inject demo backdoor into lodash |
+| `npm run restore` | Restore original `lodash.js` from backup |
+| `npm run demo` | Simulate an app loading lodash (triggers popup) |
+| `npm run audit:before` | Save pre-tamper `npm audit` JSON |
+| `npm run audit:after` | Save post-tamper `npm audit` JSON |
+| `npm run compare` | Diff audit before/after |
+| `npm run verify:backdoor` | Verify backdoor runs (silent mode) |
+| `npm run verify:integrity` | Control: file hash + `npm ci` behavior |
+
+## Project structure
 
 ```
 sca-blindspot-demo/
-├── package.json              # 依赖 lodash@4.17.15
-├── package-lock.json         # 含 integrity 哈希
-├── demo/
-│   └── app.js                # 模拟正常应用，触发弹窗
+├── demo/app.js              # Sample app that requires lodash
 ├── scripts/
-│   ├── benchmark.js            # 多工具 benchmark（--quick 为 npm audit 快速实验）
-│   ├── audit.js                # 保存 audit JSON
-│   ├── tamper.js               # 注入/恢复后门
-│   ├── backdoor-snippet.js     # 弹窗后门代码生成
-│   ├── compare-audit.js        # 对比 npm audit 报告
-│   ├── verify-backdoor.js      # 验证后门执行
-│   ├── verify-integrity.js     # 完整性对照实验
-│   └── scanners/               # 各扫描工具适配
-├── 实验报告.md                  # 完整实验报告（作业用）
-├── results/                    # 实验输出（gitignore，本地生成）
-└── README.md
+│   ├── benchmark.js         # Multi-tool benchmark orchestrator
+│   ├── tamper.js            # Inject / restore backdoor
+│   ├── scanners/            # Scanner adapters
+│   └── ...
+├── 实验报告.md               # Full experiment write-up (Chinese)
+├── package.json             # lodash@4.17.15
+└── results/                 # Generated locally (gitignored)
 ```
+
+## Mitigations
+
+SCA alone is not enough. Consider layering:
+
+- **Lockfile + `npm ci`** — tarball integrity on reinstall
+- **Provenance / Sigstore** — verify package origin
+- **Behavior analysis** (e.g. Socket.dev) — complement traditional SCA
+- **Least privilege & code review** — defense in depth
+
+## Security notice
+
+This repo contains **intentional demo backdoor code** injected into `node_modules` for local research only.
+
+- Do **not** publish tampered `node_modules` to npm or any registry
+- Do **not** use the backdoor pattern in production code
+- After experiments: `npm run restore` or `rm -rf node_modules && npm ci`
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ---
 
-## English Summary
+## 中文说明
 
-This demo shows that **npm audit matches CVEs by package name and version only**. Manually injecting a backdoor into `node_modules/lodash/lodash.js` does not change audit results. Run `npm run experiment` to reproduce. See the comparison table above for what *does* detect tampering (e.g. `npm ci` integrity checks).
+### 项目简介
+
+本仓库是一个可复现的供应链安全实验：**主流 SCA 工具（npm audit、OSV-Scanner、Retire.js 等）仅根据「包名 + 版本号」匹配已知 CVE，无法检测对 `node_modules` 的本地源码篡改。**
+
+即使手动植入可执行的后门，扫描结果依然不变。
+
+### 快速开始
+
+```bash
+git clone https://github.com/woiiicc10/sca-blindspot-demo.git
+cd sca-blindspot-demo
+npm install
+npm run benchmark    # 多工具对比（推荐）
+npm run demo         # 弹窗演示
+```
+
+### 文档
+
+- **[实验报告.md](实验报告.md)** — 完整实验报告（背景、方法、结果、分析）
+- **`REPORT.md`** — 运行 benchmark 后本地自动生成的摘要（不提交到 Git）
+
+### 结论摘要
+
+1. **SCA ≠ 代码完整性校验** — audit 只回答「是否用了有 CVE 的版本」
+2. **Retire.js 也防不住任意后门** — 它读文件是为了识别版本，不是恶意代码检测
+3. **完整性校验（哈希 / npm ci）** 属于另一安全层，与 SCA 互补
+
+完整分析见 [实验报告.md](实验报告.md)。
